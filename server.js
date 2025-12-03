@@ -6,13 +6,29 @@ const multer = require('multer');
 const fs = require('fs');
 
 const app = express();
-const PORT = process.env.PORT || 3002;
 
+// REQUIRED FOR RENDER HTTPS
+app.set('trust proxy', 1);
+
+// --- CORS FIX ---
 app.use(cors({
-    origin: '*', // Allow all origins (or specify 'https://happydayplayschools.in')
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+    origin: [
+        "https://happydayplayschools.in",
+        "https://www.happydayplayschools.in"
+    ],
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: true
 }));
+
+// Manual headers (Render needs this)
+app.use((req, res, next) => {
+    res.header("Access-Control-Allow-Origin", "https://happydayplayschools.in");
+    res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
+    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    next();
+});
+
 app.use(express.json());
 app.use(express.static(path.resolve(__dirname, 'public')));
 
@@ -29,9 +45,11 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage: storage });
 
-// --- API Endpoints ---
+// ======================
+//    API ENDPOINTS
+// ======================
 
-// 1. Login
+// Login
 app.post('/api/login', (req, res) => {
     const { role, username, password } = req.body;
     const query = "SELECT * FROM users WHERE username = ? AND password = ? AND role = ?";
@@ -45,7 +63,7 @@ app.post('/api/login', (req, res) => {
     });
 });
 
-// 2. Get All Branches
+// Branch APIs
 app.get('/api/branches', (req, res) => {
     db.all("SELECT * FROM branches", [], (err, rows) => {
         if (err) return res.status(500).json({ error: err.message });
@@ -65,14 +83,13 @@ app.post('/api/branches', (req, res) => {
 
 app.delete('/api/branches/:id', (req, res) => {
     const id = req.params.id;
-    // Optional: Check for dependencies (students/users) before deleting
     db.run("DELETE FROM branches WHERE id = ?", id, function (err) {
         if (err) return res.status(500).json({ error: err.message });
         res.json({ success: true });
     });
 });
 
-// 3. Get Students (Optional Filter by Branch)
+// Students + Upload
 app.get('/api/students', (req, res) => {
     const branchId = req.query.branch_id;
     let query = "SELECT s.*, b.name as branch_name FROM students s LEFT JOIN branches b ON s.branch_id = b.id";
@@ -89,7 +106,6 @@ app.get('/api/students', (req, res) => {
     });
 });
 
-// 4. Add Student (with Photo)
 app.post('/api/students', upload.single('photo'), (req, res) => {
     const { name, parent_phone, fees_total, fees_paid, branch_id, class_grade } = req.body;
     const photo_url = req.file ? `/uploads/${req.file.filename}` : '';
@@ -102,33 +118,7 @@ app.post('/api/students', upload.single('photo'), (req, res) => {
     stmt.finalize();
 });
 
-// 5. Delete Student
-app.delete('/api/students/:id', (req, res) => {
-    const id = req.params.id;
-    db.run("DELETE FROM students WHERE id = ?", id, function (err) {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ success: true });
-    });
-});
-
-// 6. Dashboard Stats
-app.get('/api/stats', (req, res) => {
-    const branchId = req.query.branch_id;
-    let query = "SELECT COUNT(*) as total_students, SUM(fees_paid) as total_paid, SUM(fees_total - fees_paid) as total_due FROM students";
-    let params = [];
-
-    if (branchId && branchId !== 'all') {
-        query += " WHERE branch_id = ?";
-        params.push(branchId);
-    }
-
-    db.get(query, params, (err, row) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json(row);
-    });
-});
-
-// 7. User Management APIs
+// User APIs
 app.get('/api/users', (req, res) => {
     db.all("SELECT u.id, u.username, u.role, u.branch_id, u.student_id, b.name as branch_name, s.name as student_name FROM users u LEFT JOIN branches b ON u.branch_id = b.id LEFT JOIN students s ON u.student_id = s.id", [], (err, rows) => {
         if (err) return res.status(500).json({ error: err.message });
@@ -136,72 +126,7 @@ app.get('/api/users', (req, res) => {
     });
 });
 
-app.post('/api/users', (req, res) => {
-    const { username, password, role, branch_id, student_id } = req.body;
-    const stmt = db.prepare("INSERT INTO users (username, password, role, branch_id, student_id) VALUES (?, ?, ?, ?, ?)");
-    stmt.run([username, password, role, branch_id || null, student_id || null], function (err) {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ success: true, id: this.lastID });
-    });
-    stmt.finalize();
-});
-
-app.delete('/api/users/:id', (req, res) => {
-    const id = req.params.id;
-    db.run("DELETE FROM users WHERE id = ?", id, function (err) {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ success: true });
-    });
-});
-
-// 8. Update APIs (PUT)
-app.put('/api/branches/:id', (req, res) => {
-    const { name, location } = req.body;
-    db.run("UPDATE branches SET name = ?, location = ? WHERE id = ?", [name, location, req.params.id], function (err) {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ success: true });
-    });
-});
-
-app.put('/api/students/:id', upload.single('photo'), (req, res) => {
-    const { name, parent_phone, fees_total, fees_paid, branch_id, class_grade } = req.body;
-    let query = "UPDATE students SET name=?, parent_phone=?, fees_total=?, fees_paid=?, branch_id=?, class_grade=?";
-    let params = [name, parent_phone, fees_total, fees_paid, branch_id, class_grade];
-
-    if (req.file) {
-        query += ", photo_url=?";
-        params.push(`/uploads/${req.file.filename}`);
-    }
-
-    query += " WHERE id=?";
-    params.push(req.params.id);
-
-    db.run(query, params, function (err) {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ success: true });
-    });
-});
-
-app.put('/api/users/:id', (req, res) => {
-    const { username, password, role, branch_id, student_id } = req.body;
-    let query = "UPDATE users SET username=?, role=?, branch_id=?, student_id=?";
-    let params = [username, role, branch_id || null, student_id || null];
-
-    if (password) {
-        query += ", password=?";
-        params.push(password);
-    }
-
-    query += " WHERE id=?";
-    params.push(req.params.id);
-
-    db.run(query, params, function (err) {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ success: true });
-    });
-});
-
-// 9. Daily Updates APIs
+// Daily updates
 app.get('/api/updates', (req, res) => {
     const { category, startDate, endDate } = req.query;
     let query = "SELECT * FROM daily_updates";
@@ -233,21 +158,15 @@ app.get('/api/updates', (req, res) => {
     });
 });
 
-app.post('/api/updates', (req, res) => {
-    const { date, category, content, created_by } = req.body;
-    const stmt = db.prepare("INSERT INTO daily_updates (date, category, content, created_by) VALUES (?, ?, ?, ?)");
-    stmt.run([date, category, content, created_by], function (err) {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ success: true, id: this.lastID });
-    });
-    stmt.finalize();
-});
-
-// Fallback
+// Fallback — serve login UI
 app.get(/(.*)/, (req, res) => {
     res.sendFile(path.resolve(__dirname, 'public', 'login.html'));
 });
 
+// ======================
+//  REQUIRED FOR RENDER
+// ======================
+const PORT = process.env.PORT || 3002;
 app.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Server running on port ${PORT}`);
 });
