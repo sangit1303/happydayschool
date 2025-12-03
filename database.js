@@ -1,125 +1,90 @@
-const sqlite3 = require('sqlite3').verbose();
-const path = require('path');
+const { Pool } = require('pg');
 
-// Connect to SQLite database
-const dbPath = path.resolve(__dirname, 'school.db');
-const db = new sqlite3.Database(dbPath, (err) => {
-    if (err) {
-        console.error('Error opening database:', err.message);
-    } else {
-        console.log('Connected to the SQLite database.');
-        initializeDatabase();
+// Use the connection string provided by the user
+// NOTE: In production, this should ideally be in an environment variable (process.env.DATABASE_URL)
+const connectionString = 'postgresql://postgres:Nothing@2026@db.yjapxqurcmmrmlzielye.supabase.co:5432/postgres';
+
+const pool = new Pool({
+    connectionString,
+    ssl: {
+        rejectUnauthorized: false // Required for Supabase/Render connections
     }
 });
 
-function initializeDatabase() {
-    db.serialize(() => {
+// Helper to initialize the database tables
+const initializeDatabase = async () => {
+    try {
+        const client = await pool.connect();
+        console.log("Connected to Supabase PostgreSQL");
+
         // 1. Branches Table
-        db.run(`CREATE TABLE IF NOT EXISTS branches (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE,
-            location TEXT
-        )`);
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS branches (
+                id SERIAL PRIMARY KEY,
+                name TEXT UNIQUE,
+                location TEXT
+            );
+        `);
 
-        // 2. Users Table (Updated with branch_id)
-        db.run(`CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE,
-            password TEXT,
-            role TEXT, -- 'admin', 'manager', 'student'
-            branch_id INTEGER,
-            student_id INTEGER,
-            FOREIGN KEY(branch_id) REFERENCES branches(id),
-            FOREIGN KEY(student_id) REFERENCES students(id)
-        )`);
+        // 2. Students Table
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS students (
+                id SERIAL PRIMARY KEY,
+                name TEXT,
+                parent_phone TEXT,
+                fees_total INTEGER DEFAULT 0,
+                fees_paid INTEGER DEFAULT 0,
+                fees_due INTEGER GENERATED ALWAYS AS (fees_total - fees_paid) STORED,
+                branch_id INTEGER REFERENCES branches(id),
+                photo_url TEXT,
+                report_card_url TEXT,
+                class_grade TEXT
+            );
+        `);
 
-        // Migration: Add student_id if it doesn't exist (for existing DBs)
-        db.run("ALTER TABLE users ADD COLUMN student_id INTEGER REFERENCES students(id)", (err) => {
-            // Ignore error if column already exists
-        });
+        // 3. Users Table
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                username TEXT UNIQUE,
+                password TEXT,
+                role TEXT,
+                branch_id INTEGER REFERENCES branches(id),
+                student_id INTEGER REFERENCES students(id)
+            );
+        `);
 
-        // 3. Students Table (Updated with detailed fields)
-        db.run(`CREATE TABLE IF NOT EXISTS students (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT,
-            parent_phone TEXT,
-            fees_total INTEGER DEFAULT 0,
-            fees_paid INTEGER DEFAULT 0,
-            fees_due INTEGER GENERATED ALWAYS AS (fees_total - fees_paid) VIRTUAL,
-            branch_id INTEGER,
-            photo_url TEXT,
-            report_card_url TEXT,
-            class_grade TEXT, -- e.g., 'Nursery', 'LKG'
-            FOREIGN KEY(branch_id) REFERENCES branches(id)
-        )`);
+        // 4. Daily Updates Table
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS daily_updates (
+                id SERIAL PRIMARY KEY,
+                date TEXT,
+                category TEXT,
+                content TEXT,
+                created_by INTEGER REFERENCES users(id),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
 
-        // 4. Audit Logs Table
-        db.run(`CREATE TABLE IF NOT EXISTS audit_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            action TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY(user_id) REFERENCES users(id)
-        )`);
-
-        // 5. Daily Updates Table
-        db.run(`CREATE TABLE IF NOT EXISTS daily_updates (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            date TEXT,
-            category TEXT, -- 'Nursery', 'LKG', 'UKG'
-            content TEXT,
-            created_by INTEGER,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY(created_by) REFERENCES users(id)
-        )`);
-
-        // Seed Data
-        seedData();
-    });
-}
-
-function seedData() {
-    db.get("SELECT count(*) as count FROM branches", (err, row) => {
-        if (row && row.count === 0) {
-            console.log("Seeding Branches...");
-            const branches = [
-                ['Main Branch', 'Chennai'],
-                ['North Wing', 'Bangalore']
-            ];
-            const stmt = db.prepare("INSERT INTO branches (name, location) VALUES (?, ?)");
-            branches.forEach(b => stmt.run(b));
-            stmt.finalize();
+        // Seed Data (Only if empty)
+        const res = await client.query('SELECT count(*) FROM users');
+        if (parseInt(res.rows[0].count) === 0) {
+            console.log("Seeding initial data...");
+            await client.query(`
+                INSERT INTO users (username, password, role) 
+                VALUES ('admin', 'Happy@2026', 'admin');
+            `);
         }
-    });
 
-    db.get("SELECT count(*) as count FROM users", (err, row) => {
-        if (row && row.count === 0) {
-            console.log("Seeding Users...");
-            // Admin has no branch (null), Manager has branch 1, Student has branch 1
-            const users = [
-                ['admin', 'Happy@2026', 'admin', null],
-                ['manager', 'manager123', 'manager', 1],
-                ['student', 'student123', 'student', 1]
-            ];
-            const stmt = db.prepare("INSERT INTO users (username, password, role, branch_id) VALUES (?, ?, ?, ?)");
-            users.forEach(u => stmt.run(u));
-            stmt.finalize();
-        }
-    });
+        client.release();
+    } catch (err) {
+        console.error("Database Initialization Error:", err);
+    }
+};
 
-    db.get("SELECT count(*) as count FROM students", (err, row) => {
-        if (row && row.count === 0) {
-            console.log("Seeding Students...");
-            const students = [
-                ['Alice Johnson', '919876543210', 10000, 5000, 1, 'Nursery'],
-                ['Bob Smith', '919876543211', 10000, 10000, 2, 'LKG'],
-                ['Charlie Brown', '919876543212', 12000, 10000, 1, 'Nursery']
-            ];
-            const stmt = db.prepare("INSERT INTO students (name, parent_phone, fees_total, fees_paid, branch_id, class_grade) VALUES (?, ?, ?, ?, ?, ?)");
-            students.forEach(s => stmt.run(s));
-            stmt.finalize();
-        }
-    });
-}
+// Run init
+initializeDatabase();
 
-module.exports = db;
+module.exports = {
+    query: (text, params) => pool.query(text, params),
+};
