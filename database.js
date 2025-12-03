@@ -1,11 +1,12 @@
 const { Pool } = require('pg');
 
-// Use the connection string provided by the user
-// NOTE: In production, this should ideally be in an environment variable (process.env.DATABASE_URL)
-const connectionString = 'postgresql://postgres:Nothing@2026@db.yjapxqurcmmrmlzielye.supabase.co:5432/postgres';
-
+// We use the object configuration to avoid issues with special characters (like @) in the password
 const pool = new Pool({
-    connectionString,
+    user: 'postgres',
+    host: 'db.yjapxqurcmmrmlzielye.supabase.co',
+    database: 'postgres',
+    password: 'Nothing@2026',
+    port: 5432,
     ssl: {
         rejectUnauthorized: false // Required for Supabase/Render connections
     }
