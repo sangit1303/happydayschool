@@ -1,12 +1,12 @@
 const { Pool } = require('pg');
 
-// We use the object configuration to avoid issues with special characters (like @) in the password
+// Use the Supabase Connection Pooler string (IPv4 compatible)
+// Note: We are parsing it manually to handle the special characters in the password if needed,
+// but for the pooler string, the standard connection string usually works best.
+const connectionString = 'postgresql://postgres.yjapxqurcmmrmlzielye:Nothing@2026@aws-1-ap-southeast-2.pooler.supabase.com:6543/postgres';
+
 const pool = new Pool({
-    user: 'postgres',
-    host: 'db.yjapxqurcmmrmlzielye.supabase.co',
-    database: 'postgres',
-    password: 'Nothing@2026',
-    port: 5432,
+    connectionString,
     ssl: {
         rejectUnauthorized: false // Required for Supabase/Render connections
     }
@@ -16,7 +16,7 @@ const pool = new Pool({
 const initializeDatabase = async () => {
     try {
         const client = await pool.connect();
-        console.log("Connected to Supabase PostgreSQL");
+        console.log("Connected to Supabase PostgreSQL via Pooler");
 
         // 1. Branches Table
         await client.query(`
